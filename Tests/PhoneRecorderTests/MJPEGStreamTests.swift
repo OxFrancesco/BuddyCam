@@ -10,7 +10,7 @@ private final class TestMJPEGServer {
 
     init(port: UInt16, frames: Int = 8) throws {
         self.port = port
-        let jpeg = try Self.makeJPEG()
+        let jpeg = try makeTestJPEG()
         let script = """
         import socket, sys, time
         payload = sys.stdin.buffer.read()
@@ -54,25 +54,6 @@ private final class TestMJPEGServer {
     }
 
     deinit { process?.terminate() }
-
-    private static func makeJPEG() throws -> Data {
-        let size = 160
-        var pixels = [UInt8](repeating: 0, count: size * size * 4)
-        for i in stride(from: 0, to: pixels.count, by: 4) {
-            pixels[i] = 200; pixels[i + 1] = 80; pixels[i + 2] = 70; pixels[i + 3] = 255
-        }
-        let data = Data(pixels) as CFData
-        let provider = CGDataProvider(data: data)!
-        let image = CGImage(width: size, height: size, bitsPerComponent: 8, bitsPerPixel: 32,
-                            bytesPerRow: size * 4, space: CGColorSpaceCreateDeviceRGB(),
-                            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
-                            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
-        let out = NSMutableData()
-        let dest = CGImageDestinationCreateWithData(out as CFMutableData, "public.jpeg" as CFString, 1, nil)!
-        CGImageDestinationAddImage(dest, image, nil)
-        CGImageDestinationFinalize(dest)
-        return out as Data
-    }
 }
 
 private final class Counter: @unchecked Sendable {

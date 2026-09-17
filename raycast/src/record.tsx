@@ -13,7 +13,7 @@ export default function Command() {
     const url = new URL("buddycam://record");
     url.searchParams.set("mode", values.mode);
     url.searchParams.set("format", values.format);
-    if (["usb", "network"].includes(values.source)) {
+    if (["usb", "link", "network"].includes(values.source)) {
       url.searchParams.set("source", values.source);
     }
     if (values.source === "network" && values.cameraUrl.trim()) {
@@ -40,7 +40,8 @@ export default function Command() {
       </Form.Dropdown>
       <Form.Dropdown id="source" title="Source" defaultValue="usb" storeValue>
         <Form.Dropdown.Item value="usb" title="USB" />
-        <Form.Dropdown.Item value="network" title="Network (WiFi / Tailscale)" />
+        <Form.Dropdown.Item value="link" title="Link (QR code)" />
+        <Form.Dropdown.Item value="network" title="Stream URL (MJPEG)" />
       </Form.Dropdown>
       <Form.Dropdown id="format" title="Format" defaultValue="9:16" storeValue>
         <Form.Dropdown.Item value="1:1" title="1:1" />

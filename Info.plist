@@ -14,6 +14,7 @@
 <key>NSHighResolutionCapable</key><true/>
 <key>NSCameraUsageDescription</key><string>Preview and record the camera you select.</string>
 <key>NSMicrophoneUsageDescription</key><string>Record your voice with your video.</string>
+<key>NSLocalNetworkUsageDescription</key><string>Receive camera frames from your phone over the local network.</string>
 <key>NSScreenCaptureUsageDescription</key><string>Record your selected screen with the phone camera in the corner.</string>
 <key>NSCameraUseContinuityCameraDeviceType</key><true/>
 </dict></plist>

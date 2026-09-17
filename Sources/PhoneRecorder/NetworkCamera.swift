@@ -28,8 +28,7 @@ final class MJPEGStream: NSObject, URLSessionDataDelegate {
     private var frameBuffer = Data()
     private var frameExpected: Int64 = -1
     private var sawHead = false
-    private var pendingJPEG: Data?
-    private var decoding = false
+    private let decoder = JPEGDecoder()
     private var stopped = false
 
     var onFrame: (@Sendable (CGImage) -> Void)?
@@ -52,6 +51,7 @@ final class MJPEGStream: NSObject, URLSessionDataDelegate {
         frameBuffer.removeAll(keepingCapacity: true)
         frameExpected = -1
         sawHead = false
+        decoder.onImage = { [weak self] image in self?.onFrame?(image) }
         let config = URLSessionConfiguration.default
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.timeoutIntervalForRequest = 15
@@ -143,9 +143,25 @@ final class MJPEGStream: NSObject, URLSessionDataDelegate {
     }
 
     private func emit(_ data: Data) {
-        guard data.count > 100 else { return }
-        pendingJPEG = data
-        pump()
+        decoder.submit(data)
+    }
+}
+
+// Latest-wins JPEG decode on a serial queue. When decoding falls behind, an
+// older queued frame is replaced by the newest submission rather than
+// decoded, so latency stays bounded.
+final class JPEGDecoder: @unchecked Sendable {
+    var onImage: (@Sendable (CGImage) -> Void)?
+    private let queue = DispatchQueue(label: "org.buddytools.BuddyCam.jpeg", qos: .userInitiated)
+    private var pendingJPEG: Data?
+    private var decoding = false
+
+    func submit(_ jpeg: Data) {
+        queue.async {
+            guard jpeg.count > 100 else { return }
+            self.pendingJPEG = jpeg
+            self.pump()
+        }
     }
 
     private func pump() {
@@ -156,7 +172,7 @@ final class MJPEGStream: NSObject, URLSessionDataDelegate {
             let image = CGImageSourceCreateWithData(data as CFData, nil)
                 .flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
             self.decoding = false
-            if let image { self.onFrame?(image) }
+            if let image { self.onImage?(image) }
             self.pump()
         }
     }
@@ -221,7 +237,19 @@ final class VideoSink: @unchecked Sendable {
                 bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
             ) else { return }
             context.interpolationQuality = .medium
-            context.draw(image, in: CGRect(origin: .zero, size: self.size))
+            context.setFillColor(CGColor(gray: 0, alpha: 1))
+            context.fill(CGRect(origin: .zero, size: self.size))
+            // Aspect-fit so a phone rotating mid-recording letterboxes instead
+            // of stretching.
+            let imageSize = CGSize(width: image.width, height: image.height)
+            if imageSize.width > 0, imageSize.height > 0 {
+                let scale = min(self.size.width / imageSize.width, self.size.height / imageSize.height)
+                let fitted = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+                let rect = CGRect(x: (self.size.width - fitted.width) / 2,
+                                  y: (self.size.height - fitted.height) / 2,
+                                  width: fitted.width, height: fitted.height)
+                context.draw(image, in: rect)
+            }
             let pts = CMTime(seconds: now - origin, preferredTimescale: 600)
             self.adaptor.append(pixel, withPresentationTime: pts)
         }
@@ -250,6 +278,65 @@ final class SinkBox: @unchecked Sendable {
     }
 }
 
+// The shared destination for decoded camera frames, from either the MJPEG
+// pull stream or the phone link's WebSocket push. Keeps the newest frame for
+// the preview, measures fps, and owns the recording sink.
+@MainActor @Observable
+final class FrameFeed {
+    var latestFrame: CGImage?
+    private(set) var frameSize = CGSize.zero
+    private(set) var fps = 0
+    private(set) var lastFrameAt = Date.distantPast
+
+    nonisolated let sinkBox = SinkBox()
+    private var frameTimes: [CFAbsoluteTime] = []
+
+    nonisolated init() {}
+
+    var detailText: String {
+        guard latestFrame != nil else { return "" }
+        return "\(Int(frameSize.width))×\(Int(frameSize.height)) · \(fps) fps"
+    }
+
+    // Producer entry point, any thread. Appends to the active VideoSink
+    // first, then hops to main for stats.
+    nonisolated func push(_ image: CGImage) {
+        sinkBox.sink?.append(image)
+        Task { @MainActor in self.didPush(image) }
+    }
+
+    private func didPush(_ image: CGImage) {
+        latestFrame = image
+        frameSize = CGSize(width: image.width, height: image.height)
+        lastFrameAt = Date()
+        let now = CFAbsoluteTimeGetCurrent()
+        frameTimes.append(now)
+        frameTimes = frameTimes.filter { now - $0 < 2 }
+        fps = frameTimes.count / 2
+    }
+
+    func clear() {
+        latestFrame = nil
+        frameSize = .zero
+        fps = 0
+        frameTimes = []
+    }
+
+    func startRecording(to file: URL) throws -> Date {
+        guard latestFrame != nil, frameSize.width > 0 else {
+            throw CaptureError.message("The camera is not sending frames.")
+        }
+        sinkBox.sink = try VideoSink(url: file, size: frameSize)
+        return Date()
+    }
+
+    func stopRecording() async throws {
+        let sink = sinkBox.sink
+        sinkBox.sink = nil
+        try await sink?.finish()
+    }
+}
+
 @MainActor @Observable
 final class NetworkCamera {
     enum State: Equatable {
@@ -258,19 +345,15 @@ final class NetworkCamera {
     }
 
     private(set) var state: State = .off
-    private(set) var fps = 0
-    private(set) var frameSize = CGSize.zero
     private(set) var errorDetail: String?
-    var latestFrame: CGImage?
+    nonisolated let feed = FrameFeed()
 
     private var stream: MJPEGStream?
     private var url: URL?
-    private let sinkBox = SinkBox()
     private var reconnectTask: Task<Void, Never>?
     private var watchdog: Task<Void, Never>?
     private var lastActivity = Date.distantPast
     private var retryDelay: Double = 1
-    private var frameTimes: [CFAbsoluteTime] = []
 
     var statusText: String {
         switch state {
@@ -285,7 +368,7 @@ final class NetworkCamera {
     var detailText: String {
         switch state {
         case .live:
-            return "\(Int(frameSize.width))×\(Int(frameSize.height)) · \(fps) fps"
+            return feed.detailText
         case .reconnecting:
             return errorDetail ?? ""
         default:
@@ -314,7 +397,6 @@ final class NetworkCamera {
         stream?.stop()
         stream = nil
         state = .off
-        fps = 0
         errorDetail = nil
     }
 
@@ -327,24 +409,13 @@ final class NetworkCamera {
         ensureWatchdog()
         let stream = MJPEGStream()
         stream.onFrame = { [weak self] image in
-            self?.sinkBox.sink?.append(image)
-            Task { @MainActor in self?.didFrame(image) }
+            self?.feed.push(image)
         }
         stream.onEvent = { [weak self] event in
             Task { @MainActor in self?.didEvent(event) }
         }
         self.stream = stream
         stream.start(url: url)
-    }
-
-    private func didFrame(_ image: CGImage) {
-        latestFrame = image
-        frameSize = CGSize(width: image.width, height: image.height)
-        lastActivity = Date()
-        let now = CFAbsoluteTimeGetCurrent()
-        frameTimes.append(now)
-        frameTimes = frameTimes.filter { now - $0 < 2 }
-        fps = frameTimes.count / 2
     }
 
     private func didEvent(_ event: MJPEGStream.Event) {
@@ -371,7 +442,7 @@ final class NetworkCamera {
                 try? await Task.sleep(for: .seconds(2))
                 guard let self, !Task.isCancelled else { return }
                 guard self.state == .live, let url = self.url else { continue }
-                if Date().timeIntervalSince(self.lastActivity) > 6 {
+                if Date().timeIntervalSince(max(self.lastActivity, self.feed.lastFrameAt)) > 6 {
                     self.errorDetail = "The stream stalled. Reconnecting."
                     self.stream?.stop()
                     self.stream = nil
@@ -394,16 +465,13 @@ final class NetworkCamera {
     }
 
     func startRecording(to file: URL) throws -> Date {
-        guard state == .live, latestFrame != nil, frameSize.width > 0 else {
+        guard state == .live else {
             throw CaptureError.message("The network camera is not connected.")
         }
-        sinkBox.sink = try VideoSink(url: file, size: frameSize)
-        return Date()
+        return try feed.startRecording(to: file)
     }
 
     func stopRecording() async throws {
-        let sink = sinkBox.sink
-        sinkBox.sink = nil
-        try await sink?.finish()
+        try await feed.stopRecording()
     }
 }

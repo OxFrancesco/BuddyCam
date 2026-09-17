@@ -3,7 +3,7 @@ import AVFoundation
 import Observation
 
 enum RecordingMode: String { case camera, screen }
-enum CameraSource: String { case usb, network }
+enum CameraSource: String { case usb, link, network }
 enum RecordingFormat: String, CaseIterable, Identifiable {
     case square = "1:1", portrait = "9:16", landscape = "16:9"
     var id: String { rawValue }
@@ -57,6 +57,7 @@ final class Recorder {
     var elapsed = 0.0
     var quitAfterSaving = false
     let preview = PreviewCapture()
+    let link = PhoneLink()
     let network = NetworkCamera()
     private var reconnectTask: Task<Void, Never>?
     private var process: Process?
@@ -120,17 +121,26 @@ final class Recorder {
             return ScreenChoice(id: index, displayID: displayID, name: screen?.localizedName ?? "Screen \(index + 1)")
         }
         if !screens.contains(where: { $0.id == screenIndex }) { screenIndex = screens.first?.id ?? 0 }
+        // A refresh re-resolves the link certificate and URL.
+        if source == .link { link.stop() }
         changePreview()
     }
 
     func changePreview() {
         guard !busy else { return }
-        if source == .network {
-            preview.select(nil)
-            network.connect(urlString: networkURL)
-        } else {
+        switch source {
+        case .usb:
             network.disconnect()
+            link.stop()
             preview.select(cameras.first { $0.uniqueID == cameraID })
+        case .link:
+            preview.select(nil)
+            network.disconnect()
+            link.start()
+        case .network:
+            preview.select(nil)
+            link.stop()
+            network.connect(urlString: networkURL)
         }
     }
 
@@ -201,19 +211,32 @@ final class Recorder {
                 error = "Your selected camera is disconnected. Reconnect it and refresh devices."
                 return
             }
+        } else if source == .link {
+            // The phone may still be scanning the QR code; give it a moment.
+            if link.feed.latestFrame == nil {
+                let deadline = Date().addingTimeInterval(10)
+                while link.feed.latestFrame == nil, Date() < deadline {
+                    if case .failed = link.state { break }
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+            }
+            guard link.state == .live else {
+                error = "Scan the QR code with your phone first."
+                return
+            }
         } else {
             guard !networkURL.trimmingCharacters(in: .whitespaces).isEmpty else {
                 error = "Enter the camera stream address first."
                 return
             }
-            if network.latestFrame == nil {
+            if network.feed.latestFrame == nil {
                 network.connect(urlString: networkURL)
                 let deadline = Date().addingTimeInterval(10)
-                while network.latestFrame == nil, Date() < deadline {
+                while network.feed.latestFrame == nil, Date() < deadline {
                     try? await Task.sleep(for: .milliseconds(200))
                 }
             }
-            guard network.latestFrame != nil else {
+            guard network.feed.latestFrame != nil else {
                 error = "The network camera did not send frames. Check the stream address."
                 return
             }
@@ -243,7 +266,7 @@ final class Recorder {
         workingDirectory = working
         rawCamera = working.appendingPathComponent("camera.mov")
         rawScreen = working.appendingPathComponent("screen.mp4")
-        rawAudio = source == .network && microphone != nil ? working.appendingPathComponent("audio.mov") : nil
+        rawAudio = source != .usb && microphone != nil ? working.appendingPathComponent("audio.mov") : nil
         expectedAudio = microphone != nil
         elapsed = 0
         errorBuffer = ""
@@ -263,7 +286,12 @@ final class Recorder {
                 }
             }
             let began: Date
-            if source == .network {
+            if source == .link {
+                if let rawAudio, let microphone {
+                    _ = try await preview.startRecording(to: rawAudio, microphone: microphone)
+                }
+                began = try link.startRecording(to: rawCamera!)
+            } else if source == .network {
                 if let rawAudio, let microphone {
                     _ = try await preview.startRecording(to: rawAudio, microphone: microphone)
                 }
@@ -296,7 +324,8 @@ final class Recorder {
         timer?.cancel()
         Task {
             do {
-                if source == .network { try await network.stopRecording() }
+                if source == .link { try await link.stopRecording() }
+                else if source == .network { try await network.stopRecording() }
                 try await preview.stopRecording()
                 try await screenCapture?.stop()
                 try exportRecording()
