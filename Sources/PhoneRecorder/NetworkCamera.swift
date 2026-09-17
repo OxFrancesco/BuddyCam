@@ -91,6 +91,7 @@ final class MJPEGStream: NSObject, URLSessionDataDelegate {
         // A part response in a split multipart stream, or a still image.
         let expected = response.expectedContentLength
         queue.async {
+            guard dataTask === self.task else { return }
             self.flush()
             self.frameExpected = expected
         }
@@ -99,6 +100,7 @@ final class MJPEGStream: NSObject, URLSessionDataDelegate {
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         queue.async {
+            guard dataTask === self.task else { return }
             self.frameBuffer.append(data)
             if self.frameExpected > 0, self.frameBuffer.count >= self.frameExpected {
                 self.flush()
@@ -110,9 +112,9 @@ final class MJPEGStream: NSObject, URLSessionDataDelegate {
         }
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+    func urlSession(_ session: URLSession, task completedTask: URLSessionTask, didCompleteWithError error: Error?) {
         queue.async {
-            guard !self.stopped else { return }
+            guard !self.stopped, completedTask === self.task else { return }
             if let error {
                 self.onEvent?(.failed(error.localizedDescription))
             } else {
@@ -265,6 +267,8 @@ final class NetworkCamera {
     private var url: URL?
     private let sinkBox = SinkBox()
     private var reconnectTask: Task<Void, Never>?
+    private var watchdog: Task<Void, Never>?
+    private var lastActivity = Date.distantPast
     private var retryDelay: Double = 1
     private var frameTimes: [CFAbsoluteTime] = []
 
@@ -305,6 +309,8 @@ final class NetworkCamera {
 
     func disconnect() {
         reconnectTask?.cancel()
+        watchdog?.cancel()
+        watchdog = nil
         stream?.stop()
         stream = nil
         state = .off
@@ -317,6 +323,8 @@ final class NetworkCamera {
         state = .connecting
         errorDetail = nil
         retryDelay = 1
+        lastActivity = Date()
+        ensureWatchdog()
         let stream = MJPEGStream()
         stream.onFrame = { [weak self] image in
             self?.sinkBox.sink?.append(image)
@@ -332,6 +340,7 @@ final class NetworkCamera {
     private func didFrame(_ image: CGImage) {
         latestFrame = image
         frameSize = CGSize(width: image.width, height: image.height)
+        lastActivity = Date()
         let now = CFAbsoluteTimeGetCurrent()
         frameTimes.append(now)
         frameTimes = frameTimes.filter { now - $0 < 2 }
@@ -343,11 +352,32 @@ final class NetworkCamera {
         case .connected:
             state = .live
             retryDelay = 1
+            lastActivity = Date()
         case .closed:
             scheduleRetry()
         case .failed(let message):
             errorDetail = message
             scheduleRetry()
+        }
+    }
+
+    // A stream that stays connected but stops delivering frames never trips
+    // URLSession's timeouts, so live links get a watchdog: six seconds without
+    // a frame restarts the connection.
+    private func ensureWatchdog() {
+        guard watchdog == nil else { return }
+        watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard let self, !Task.isCancelled else { return }
+                guard self.state == .live, let url = self.url else { continue }
+                if Date().timeIntervalSince(self.lastActivity) > 6 {
+                    self.errorDetail = "The stream stalled. Reconnecting."
+                    self.stream?.stop()
+                    self.stream = nil
+                    self.start(url)
+                }
+            }
         }
     }
 

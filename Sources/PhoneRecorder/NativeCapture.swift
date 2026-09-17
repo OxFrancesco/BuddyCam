@@ -17,7 +17,6 @@ final class PreviewCapture: NSObject, AVCaptureFileOutputRecordingDelegate, @unc
     func select(_ device: AVCaptureDevice?) {
         queue.async {
             guard !self.movie.isRecording else { return }
-            self.session.stopRunning()
             self.session.beginConfiguration()
             self.session.inputs.forEach { self.session.removeInput($0) }
             if self.session.canSetSessionPreset(.hd1920x1080) { self.session.sessionPreset = .hd1920x1080 }
@@ -26,7 +25,7 @@ final class PreviewCapture: NSObject, AVCaptureFileOutputRecordingDelegate, @unc
             }
             if self.session.canAddOutput(self.movie) { self.session.addOutput(self.movie) }
             self.session.commitConfiguration()
-            if !self.session.inputs.isEmpty { self.session.startRunning() }
+            if !self.session.isRunning, !self.session.inputs.isEmpty { self.session.startRunning() }
         }
     }
 

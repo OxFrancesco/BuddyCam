@@ -91,16 +91,20 @@ struct RecorderView: View {
     private var preview: some View {
         ZStack {
             Color.black
-            Group {
-                if recorder.source == .network {
-                    NetworkPreview(frame: recorder.network.latestFrame)
-                } else {
-                    CameraPreview(session: recorder.preview.session)
-                }
+            // The USB preview layer stays mounted in network mode: letting the
+            // AVCaptureVideoPreviewLayer deallocate while the capture queue is
+            // mid-configuration deadlocks the session lock against the main thread.
+            CameraPreview(session: recorder.preview.session)
+                .frame(width: recorder.rotation % 180 == 0 ? recorder.format.previewWidth : 342,
+                       height: recorder.rotation % 180 == 0 ? 342 : recorder.format.previewWidth)
+                .rotationEffect(.degrees(Double(recorder.rotation)))
+                .opacity(recorder.source == .network ? 0 : 1)
+            if recorder.source == .network {
+                NetworkPreview(frame: recorder.network.latestFrame)
+                    .frame(width: recorder.rotation % 180 == 0 ? recorder.format.previewWidth : 342,
+                           height: recorder.rotation % 180 == 0 ? 342 : recorder.format.previewWidth)
+                    .rotationEffect(.degrees(Double(recorder.rotation)))
             }
-            .frame(width: recorder.rotation % 180 == 0 ? recorder.format.previewWidth : 342,
-                   height: recorder.rotation % 180 == 0 ? 342 : recorder.format.previewWidth)
-            .rotationEffect(.degrees(Double(recorder.rotation)))
 
             previewOverlay
         }
