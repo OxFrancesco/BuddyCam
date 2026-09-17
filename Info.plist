@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>PhoneRecorder</string>
+<key>CFBundleIdentifier</key><string>org.buddytools.BuddyCam</string>
+<key>CFBundleName</key><string>BuddyCam</string>
+<key>CFBundleDisplayName</key><string>BuddyCam</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>1.0</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>BuddyCam controls</string><key>CFBundleURLSchemes</key><array><string>buddycam</string></array></dict></array>
+<key>LSMinimumSystemVersion</key><string>15.0</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSCameraUsageDescription</key><string>Preview and record the camera you select.</string>
+<key>NSMicrophoneUsageDescription</key><string>Record your voice with your video.</string>
+<key>NSScreenCaptureUsageDescription</key><string>Record your selected screen with the phone camera in the corner.</string>
+<key>NSCameraUseContinuityCameraDeviceType</key><true/>
+</dict></plist>

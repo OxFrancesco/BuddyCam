@@ -1,0 +1,44 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "buddycam",
+  "title": "BuddyCam",
+  "description": "Record your phone camera, alone or with your Mac screen.",
+  "icon": "icon.png",
+  "author": "francescooddo",
+  "license": "MIT",
+  "categories": ["Productivity", "Video"],
+  "commands": [
+    {
+      "name": "record",
+      "title": "Start Recording",
+      "description": "Choose camera or screen, aspect ratio, and destination folder",
+      "mode": "view"
+    },
+    {
+      "name": "stop",
+      "title": "Stop Recording",
+      "description": "Stop BuddyCam and save the recording",
+      "mode": "no-view"
+    },
+    {
+      "name": "open-buddycam",
+      "title": "Open BuddyCam",
+      "description": "Open the camera preview and recording controls",
+      "mode": "no-view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^2.4.1",
+    "react": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.3",
+    "@types/react": "^19.3.0",
+    "typescript": "^7.0.2"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "typecheck": "tsc --noEmit"
+  }
+}

@@ -1,0 +1,29 @@
+# Local builds and package caches
+.build/
+.swiftpm/
+node_modules/
+dist/
+raycast/dist/
+*.tsbuildinfo
+.DS_Store
+
+# Private recordings, screenshots, and previous prototypes
+verification/
+archive/
+*.mov
+*.mp4
+*.wav
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.p12
+*.p8
+*.key
+*.mobileprovision
+
+# Local agent instructions and read-only reference codebases
+AGENTS.md
+CLAUDE.md
+resources/
